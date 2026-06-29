@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: hallmarkpro-postgres
+    environment:
+      POSTGRES_USER: hallmarkpro
+      POSTGRES_PASSWORD: hallmarkpro
+      POSTGRES_DB: hallmarkpro
+    ports:
+      - "5432:5432"
+    volumes:
+      - hallmarkpro_pg:/var/lib/postgresql/data
+      - ../database/schema.sql:/docker-entrypoint-initdb.d/001_schema.sql:ro
+
+volumes:
+  hallmarkpro_pg:
