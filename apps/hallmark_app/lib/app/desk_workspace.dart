@@ -297,7 +297,7 @@ class _HuidDeskState extends State<HuidDesk> {
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text('Pending HUID',
+                          const Text('Pending HUID No',
                               style: TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.bold,
