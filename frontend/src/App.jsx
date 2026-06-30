@@ -10,6 +10,7 @@ export default function App() {
       Tailwind is Working!
       <p>Test Anubhav </p>
       <p>test develop</p>
+      <p>test develop 2</p>
     </div>
   );
 }
