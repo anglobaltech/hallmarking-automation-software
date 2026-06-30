@@ -350,7 +350,7 @@ class _HuidDeskState extends State<HuidDesk> {
                                     ),
                                     Padding(
                                       padding: EdgeInsets.symmetric(vertical: 10),
-                                      child: Text('CUSTOMER',
+                                      child: Text('CUSTOMER NAME',
                                           style: TextStyle(
                                               fontSize: 10,
                                               fontWeight: FontWeight.bold,
