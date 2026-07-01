@@ -1,102 +1,105 @@
-// server/src/index.js
+// server/index.js — Main entry point
 import cors from 'cors';
 import express from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { z } from 'zod';
 import { config } from './config.js';
 import { checkDatabase, pool } from './db.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Route modules
+import jewellersRouter from './src/routes/jewellers.js';
+import laserRouter from './src/routes/laser.js';
+import xrfRouter from './src/routes/xrf.js';
+import solderingRouter from './src/routes/soldering.js';
+import fireRouter from './src/routes/fire.js';
+import exchangeRouter from './src/routes/exchange.js';
+import dashboardRouter from './src/routes/dashboard.js';
 
 const app = express();
 const httpServer = createServer(app);
-const io = new Server(httpServer, { cors: { origin: "*" } });
-
-app.use(cors());
-app.use(express.json({ limit: '2mb' }));
-
-// Schemas
-const huidAssignSchema = z.object({
-  articleId: z.string(),
-  huidNumber: z.string(),
-  hallmarkYear: z.string().optional(),
-  assayOffice: z.string().optional(),
-  certifiedPurity: z.string().optional(),
+const io = new Server(httpServer, {
+  cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 
-// Routes
+// ─── Middleware ───────────────────────────────────────────────
+app.use(cors({ origin: '*' }));
+app.use(express.json({ limit: '5mb' }));
+
+// Request logger (dev)
+app.use((req, _res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  next();
+});
+
+// ─── Health Check ─────────────────────────────────────────────
 app.get('/health', async (_req, res) => {
   try {
+    const time = await checkDatabase();
+    res.json({ ok: true, database: 'connected', serverTime: time });
+  } catch (error) {
+    res.json({ ok: true, database: 'unavailable', error: error.message });
+  }
+});
+
+// ─── API Routes ───────────────────────────────────────────────
+app.use('/api/jewellers', jewellersRouter);
+app.use('/api/laser-jobs', laserRouter);
+app.use('/api/xrf-tests', xrfRouter);
+app.use('/api/soldering-jobs', solderingRouter);
+app.use('/api/fire-assays', fireRouter);
+app.use('/api/gold-exchanges', exchangeRouter);
+app.use('/api/dashboard', dashboardRouter);
+
+// ─── Socket.IO ────────────────────────────────────────────────
+io.on('connection', (socket) => {
+  console.log('Client connected:', socket.id);
+  socket.on('disconnect', () => console.log('Client disconnected:', socket.id));
+});
+
+// Export io so routes can emit events
+export { io };
+
+// ─── Global Error Handler ────────────────────────────────────
+app.use((err, req, res, _next) => {
+  console.error(`[ERROR] ${req.method} ${req.path}:`, err.message);
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal server error',
+    path: req.path,
+  });
+});
+
+// ─── Start Server ─────────────────────────────────────────────
+httpServer.listen(config.port, async () => {
+  console.log(`\n🚀 Server running on http://localhost:${config.port}`);
+  console.log(`📋 API endpoints:`);
+  console.log(`   GET  /health`);
+  console.log(`   CRUD /api/jewellers`);
+  console.log(`   CRUD /api/laser-jobs`);
+  console.log(`   CRUD /api/xrf-tests`);
+  console.log(`   CRUD /api/soldering-jobs`);
+  console.log(`   CRUD /api/fire-assays`);
+  console.log(`   CRUD /api/gold-exchanges`);
+  console.log(`   GET  /api/dashboard/stats`);
+
+  try {
     await checkDatabase();
-    res.json({ ok: true, database: 'connected' });
-  } catch (error) {
-    res.json({ ok: true, database: 'unavailable' });
+    console.log(`✅ PGlite (WASM PostgreSQL) connected\n`);
+
+    // Auto-migrate if empty
+    const { rows } = await pool.query(`SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'`);
+    if (parseInt(rows[0].count) === 0) {
+      console.log('📦 Database is empty. Running migrations...');
+      const sql = fs.readFileSync(path.join(__dirname, 'migrations', '001_init.sql'), 'utf-8');
+      await pool.exec(sql);
+      console.log('✅ Migrations applied successfully.\n');
+    }
+  } catch (err) {
+    console.log(`⚠️  Database error: ${err.message}`);
   }
-});
-
-// Fetch Pending HUID
-app.get('/api/huid/pending', async (req, res, next) => {
-  try {
-    const result = await pool.query(`
-      SELECT 
-        a.id, 
-        a.article_type, 
-        a.declared_purity, 
-        a.gross_weight,
-        c.full_name as customer_name
-      FROM articles a
-      JOIN customers c ON a.customer_id = c.id
-      LEFT JOIN huid_records h ON a.id = h.article_id
-      WHERE h.article_id IS NULL 
-        AND a.status = 'intake_complete'
-      ORDER BY a.created_at DESC
-      LIMIT 50
-    `);
-    res.json({ pending: result.rows });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Assign HUID
-app.post('/api/huid/assign', async (req, res, next) => {
-  try {
-    const parsed = huidAssignSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
-
-    const { articleId, huidNumber } = parsed.data;
-
-    await pool.query('BEGIN');
-
-    await pool.query(`
-      INSERT INTO huid_records (article_id, huid_code, assigned_by)
-      VALUES ($1, $2, NULL)
-    `, [articleId, huidNumber]);
-
-    await pool.query(`
-      UPDATE articles 
-      SET status = 'huid_stamped', updated_at = NOW()
-      WHERE id = $1
-    `, [articleId]);
-
-    await pool.query('COMMIT');
-
-    io.emit('huid_assigned', { articleId, huidNumber });
-
-    res.json({ success: true });
-  } catch (error) {
-    await pool.query('ROLLBACK');
-    next(error);
-  }
-});
-
-// Socket
-io.on('connection', () => console.log('Client connected'));
-
-app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ error: err.message });
-});
-
-httpServer.listen(config.port, () => {
-  console.log(`Server running on http://localhost:${config.port}`);
 });
