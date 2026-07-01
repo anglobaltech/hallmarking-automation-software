@@ -1,11 +1,7 @@
-import pg from 'pg';
-import { config } from './config.js';
+import { PGlite } from '@electric-sql/pglite';
 
-const { Pool } = pg;
-
-export const pool = new Pool({
-  connectionString: config.databaseUrl,
-});
+// Initialize a local PGlite database
+export const pool = new PGlite('./pglite-data');
 
 export async function checkDatabase() {
   const result = await pool.query('SELECT now() AS now');
